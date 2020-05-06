@@ -7,6 +7,7 @@ set(PACKAGE onig)
 set(PACKAGE_VERSION ${PROJECT_VERSION})
 
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(BUILD_STATIC_LIBS "Build static libraries" OFF)
 option(ENABLE_POSIX_API  "Include POSIX API" ON)
 if(MSVC)
   option(MSVC_STATIC_RUNTIME "Build with static runtime" OFF)
@@ -59,28 +60,57 @@ if(ENABLE_POSIX_API)
   set(_INST_HEADERS ${_INST_HEADERS} src/onigposix.h)
 endif()
 
-add_library(onig ${_SRCS})
-target_include_directories(onig PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
+set(ONIG_LIBRARIES)
+function(setup_onig_lib library)
+  target_include_directories(${library} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
 
-if(MSVC)
-  target_compile_options(onig PRIVATE
+  if(MSVC)
+    target_compile_options(${library} PRIVATE
 	#/W4
 	)
-  if(MSVC_STATIC_RUNTIME)
-	target_compile_options(onig PRIVATE
+    if(MSVC_STATIC_RUNTIME)
+	target_compile_options(${library} PRIVATE
 	  $<$<CONFIG:Release>:/MT>
 	  $<$<CONFIG:Debug>:/MTd>
 	  $<$<CONFIG:MinSizeRel>:/MT>
 	  $<$<CONFIG:RelWithDebgInfo>:/MTd>
 	  )
-	target_compile_definitions(onig PUBLIC -DONIG_STATIC)
-  endif()
-elseif(CMAKE_COMPILER_IS_GNUCC)
-  target_compile_options(onig PRIVATE
+	target_compile_definitions(${library} PUBLIC -DONIG_STATIC)
+    endif()
+  elseif(CMAKE_COMPILER_IS_GNUCC)
+    target_compile_options(${library} PRIVATE
 	-Wall
 	)
+  endif()
+endfunction()
+
+if(NOT BUILD_SHARED_LIBS AND NOT BUILD_STATIC_LIBS)
+  message(FATAL_ERROR "Both BUILD_SHARED_LIBS and BUILD_STATIC_LIBS have been disabled")
+endif()
+if(BUILD_SHARED_LIBS)
+  add_library(onig_shared SHARED ${_SRCS})
+  setup_onig_lib(onig_shared)
+  # Parse SOVERSION information from LTVERSION in configure.ac
+  file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/configure.ac" LTVERSION REGEX "^LTVERSION *= *\"?[0-9]+:[0-9]+:[0-9]+\"?")
+  string(REGEX REPLACE "^LTVERSION *= *\"?([0-9]+:[0-9]+:[0-9]+)\"?.*$" "\\1" LTVERSION "${LTVERSION}")
+  string(REGEX REPLACE "^([0-9]+):([0-9]+):([0-9]+)" "\\1" LTCURRENT ${LTVERSION})
+  string(REGEX REPLACE "^([0-9]+):([0-9]+):([0-9]+)" "\\2" LTREVISION ${LTVERSION})
+  string(REGEX REPLACE "^([0-9]+):([0-9]+):([0-9]+)" "\\3" LTAGE ${LTVERSION})
+  math(EXPR ONIG_SOVERSION "${LTCURRENT} - ${LTAGE}")
+  set_target_properties(onig_shared PROPERTIES
+      OUTPUT_NAME onig
+      SOVERSION "${ONIG_SOVERSION}"
+      VERSION "${ONIG_SOVERSION}.${LTAGE}.${LTREVISION}")
+  list(APPEND ONIG_LIBRARIES onig_shared)
+endif()
+if(BUILD_STATIC_LIBS)
+  add_library(onig_static STATIC ${_SRCS})
+  setup_onig_lib(onig_static)
+  set_target_properties(onig_static PROPERTIES
+      OUTPUT_NAME onig)
+  list(APPEND ONIG_LIBRARIES onig_static)
 endif()
 
 
@@ -131,7 +161,7 @@ configure_package_config_file(
 #   * header location after install: <prefix>/include/
 #   * headers can be included by C code `#include <oniguruma.h>`
 install(
-    TARGETS onig
+	TARGETS ${ONIG_LIBRARIES}
     EXPORT "${TARGETS_EXPORT_NAME}"
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
